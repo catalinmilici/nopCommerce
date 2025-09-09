@@ -1,7 +1,7 @@
-name: Manual Deploy to Windows IIS (FTP + app_offline din repo)
+name: Manual Deploy to Windows IIS (FTP + app_offline)
 
 on:
-  workflow_dispatch: {}   # rulează doar manual
+  workflow_dispatch: {}   # rulează doar manual din Actions
 
 jobs:
   build-and-deploy:
@@ -9,7 +9,7 @@ jobs:
     env:
       CONFIGURATION: Release
       PUBLISH_DIR: publish
-      PROJECT_PATH: src/Nop.Web/Nop.Web.csproj   # <- ajustează calea proiectului
+      PROJECT_PATH: src/Presentation/Nop.Web/Nop.Web.csproj   # <- ajustează dacă ai altă structură
 
     steps:
       # 1) Ia codul
@@ -24,12 +24,32 @@ jobs:
         with:
           dotnet-version: 8.0.x   # schimbă dacă folosești altă versiune
 
-      # 3) Restore
+      # 3) (opțional) afișează rapid structura repo pentru debug
+      # - name: Quick tree
+      #   shell: pwsh
+      #   run: |
+      #     Get-ChildItem -Depth 2
+      #     Write-Host "---- csproj files ----"
+      #     Get-ChildItem -Recurse -Filter *.csproj | ForEach-Object { $_.FullName }
+
+      # 4) Verifică faptul că PROJECT_PATH există
+      - name: Verify project path
+        shell: pwsh
+        run: |
+          Write-Host "Looking for: $env:PROJECT_PATH"
+          if (-not (Test-Path $env:PROJECT_PATH)) {
+            Write-Host "Project not found. Listing candidates:"
+            Get-ChildItem -Recurse -Filter *.csproj | ForEach-Object { $_.FullName }
+            throw "Project file not found at $env:PROJECT_PATH"
+          }
+
+      # 5) Restore
       - name: Restore
         run: dotnet restore
 
-      # 4) Publish (framework-dependent; serverul are .NET Runtime instalat)
+      # 6) Publish (framework-dependent; serverul are .NET Runtime instalat)
       - name: Publish .NET
+        shell: pwsh
         run: |
           dotnet publish "$env:PROJECT_PATH" `
             -c $env:CONFIGURATION `
@@ -37,36 +57,46 @@ jobs:
             -r win-x64 `
             --self-contained false `
             -p:PublishReadyToRun=true
-      # Dacă serverul NU are runtime, folosește:
-      # --self-contained true  (și așteaptă binare mai mari)
+      # Dacă serverul NU are runtime, înlocuiește linia de mai sus cu:
+      # dotnet publish "$env:PROJECT_PATH" `
+      #   -c $env:CONFIGURATION `
+      #   -o $env:PUBLISH_DIR `
+      #   -r win-x64 `
+      #   --self-contained true `
+      #   -p:PublishReadyToRun=true `
+      #   -p:IncludeNativeLibrariesForSelfExtract=true
 
+      # 7) Vezi ce s-a publicat
       - name: List publish output
         run: dir $env:PUBLISH_DIR
 
-      # --- OFFLINE: urcă _app_offline.htm ca app_offline.htm ---
-      # Presupunem că ai fișierul în repo la: ./_app_offline.htm (rădăcină).
+      # 8) Pregătește fișierul de mentenanță din repo (_app_offline.htm -> app_offline.htm)
+      #    Presupunem că ai _app_offline.htm în rădăcina repo-ului. Ajustează calea dacă e în altă parte.
       - name: Prepare offline file from repo
+        shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path offline | Out-Null
           Copy-Item -Path "_app_offline.htm" -Destination "offline/app_offline.htm" -Force
 
+      # 9) Pune site-ul offline (urcă app_offline.htm)
       - name: Take site offline (upload app_offline.htm)
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
           server:     ${{ secrets.FTP_SERVER }}
           username:   ${{ secrets.FTP_USERNAME }}
           password:   ${{ secrets.FTP_PASSWORD }}
-          server-dir: ${{ secrets.FTP_DIR }}     # ex: site/wwwroot/
+          server-dir: ${{ secrets.FTP_DIR }}     # ex: site/wwwroot/ sau httpdocs/ sau ./
           local-dir:  ./offline
           protocol:   ftp
           exclude: |
             **/.git*
             **/.github/**
 
+      # 10) Așteaptă eliberarea DLL-urilor de către IIS
       - name: Wait IIS to unload app
         run: Start-Sleep -Seconds 8
 
-      # --- DEPLOY: urcă build-ul, fără să atingi app_offline.htm ---
+      # 11) Deploy fișierele publicate (fără să atingi app_offline.htm)
       - name: Deploy site files (while offline)
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
@@ -91,7 +121,7 @@ jobs:
             **/App_Data/appsettings.json
             **/appsettings.Production.json
 
-      # --- ONLINE: șterge app_offline.htm din server ---
+      # 12) Adu site-ul online (șterge app_offline.htm)
       - name: Bring site online (delete app_offline.htm)
         shell: pwsh
         run: |
@@ -112,5 +142,5 @@ jobs:
           try {
             $resp = $req.GetResponse(); $resp.Close()
           } catch {
-            Write-Host "Warning: couldn't delete app_offline.htm ($_)"  # nu bloca pipeline-ul dacă deja nu mai există
-
+            Write-Host "Warning: couldn't delete app_offline.htm ($_)"
+          }
