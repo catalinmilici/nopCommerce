@@ -1,0 +1,116 @@
+name: Manual Deploy to Windows IIS (FTP + app_offline din repo)
+
+on:
+  workflow_dispatch: {}   # rulează doar manual
+
+jobs:
+  build-and-deploy:
+    runs-on: windows-latest
+    env:
+      CONFIGURATION: Release
+      PUBLISH_DIR: publish
+      PROJECT_PATH: src/Nop.Web/Nop.Web.csproj   # <- ajustează calea proiectului
+
+    steps:
+      # 1) Ia codul
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # 2) .NET SDK
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x   # schimbă dacă folosești altă versiune
+
+      # 3) Restore
+      - name: Restore
+        run: dotnet restore
+
+      # 4) Publish (framework-dependent; serverul are .NET Runtime instalat)
+      - name: Publish .NET
+        run: |
+          dotnet publish "$env:PROJECT_PATH" `
+            -c $env:CONFIGURATION `
+            -o $env:PUBLISH_DIR `
+            -r win-x64 `
+            --self-contained false `
+            -p:PublishReadyToRun=true
+      # Dacă serverul NU are runtime, folosește:
+      # --self-contained true  (și așteaptă binare mai mari)
+
+      - name: List publish output
+        run: dir $env:PUBLISH_DIR
+
+      # --- OFFLINE: urcă _app_offline.htm ca app_offline.htm ---
+      # Presupunem că ai fișierul în repo la: ./_app_offline.htm (rădăcină).
+      - name: Prepare offline file from repo
+        run: |
+          New-Item -ItemType Directory -Force -Path offline | Out-Null
+          Copy-Item -Path "_app_offline.htm" -Destination "offline/app_offline.htm" -Force
+
+      - name: Take site offline (upload app_offline.htm)
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server:     ${{ secrets.FTP_SERVER }}
+          username:   ${{ secrets.FTP_USERNAME }}
+          password:   ${{ secrets.FTP_PASSWORD }}
+          server-dir: ${{ secrets.FTP_DIR }}     # ex: site/wwwroot/
+          local-dir:  ./offline
+          protocol:   ftp
+          exclude: |
+            **/.git*
+            **/.github/**
+
+      - name: Wait IIS to unload app
+        run: Start-Sleep -Seconds 8
+
+      # --- DEPLOY: urcă build-ul, fără să atingi app_offline.htm ---
+      - name: Deploy site files (while offline)
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server:     ${{ secrets.FTP_SERVER }}
+          username:   ${{ secrets.FTP_USERNAME }}
+          password:   ${{ secrets.FTP_PASSWORD }}
+          server-dir: ${{ secrets.FTP_DIR }}
+          local-dir:  ${{ env.PUBLISH_DIR }}
+          protocol:   ftp
+          exclude: |
+            **/app_offline.htm
+            **/.git*
+            **/.github/**
+            **/*.pdb
+            **/*.md
+            **/*.map
+            **/*.xml
+            **/node_modules/**
+            # nopCommerce: NU suprascrie setările de pe server
+            **/App_Data/dataSettings.json
+            **/App_Data/plugins.json
+            **/App_Data/appsettings.json
+            **/appsettings.Production.json
+
+      # --- ONLINE: șterge app_offline.htm din server ---
+      - name: Bring site online (delete app_offline.htm)
+        shell: pwsh
+        run: |
+          $server = "${{ secrets.FTP_SERVER }}"
+          $dir    = "${{ secrets.FTP_DIR }}".TrimEnd('/')
+          $user   = "${{ secrets.FTP_USERNAME }}"
+          $pass   = "${{ secrets.FTP_PASSWORD }}"
+
+          $url = if ($dir -eq "." -or [string]::IsNullOrWhiteSpace($dir)) {
+            "ftp://$server/app_offline.htm"
+          } else {
+            "ftp://$server/$dir/app_offline.htm"
+          }
+
+          $req = [System.Net.FtpWebRequest]::Create($url)
+          $req.Method = [System.Net.WebRequestMethods+Ftp]::DeleteFile
+          $req.Credentials = New-Object System.Net.NetworkCredential($user, $pass)
+          try {
+            $resp = $req.GetResponse(); $resp.Close()
+          } catch {
+            Write-Host "Warning: couldn't delete app_offline.htm ($_)"  # nu bloca pipeline-ul dacă deja nu mai există
+
