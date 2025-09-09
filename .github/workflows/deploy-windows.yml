@@ -9,7 +9,7 @@ jobs:
     env:
       CONFIGURATION: Release
       PUBLISH_DIR: publish
-      PROJECT_PATH: src/Presentation/Nop.Web/Nop.Web.csproj   # <- ajustează dacă ai altă structură
+      PROJECT_PATH: Presentation/Nop.Web/Nop.Web.csproj   # <- ajustează dacă ai altă structură
 
     steps:
       # 1) Ia codul
