@@ -80,19 +80,20 @@ jobs:
           local-dir:  ${{ env.PUBLISH_DIR }}/
           protocol:   ftp
           exclude: |
-            **/app_offline.htm
-            **/wwwroot/**          # 👈 nu deploya nimic din wwwroot
             **/.git*
             **/.github/**
-            **/*.pdb
-            **/*.md
-            **/*.map
-            **/*.xml
-            **/node_modules/**
-            **/App_Data/dataSettings.json
-            **/App_Data/plugins.json
-            **/App_Data/appsettings.json
-            **/appsettings.Production.json
+            *.pdb
+            *.md
+            *.map
+            *.xml
+            node_modules/**
+            app_offline.htm
+            wwwroot/**
+            App_Data/dataSettings.json
+            App_Data/plugins.json
+            App_Data/appsettings.json
+            appsettings.Production.json
+
 
       - name: Remove app_offline.htm (bring site online)
         shell: pwsh
